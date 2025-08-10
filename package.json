@@ -1,0 +1,60 @@
+{
+  "name": "@synet/fs-ai",
+  "version": "1.0.0",
+  "description": "AI-safe filesystem with path protection, audit trails, and consciousness integration",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "dev:test": "vitest",
+    "demo": "tsx demo/ai-safety-demo.ts",
+    "clean": "rimraf dist",
+    "coverage": "vitest --coverage",
+    "lint": "biome lint ./src",
+    "lint:fix": "biome lint ./src --write",
+    "check": "biome check ./src",
+    "type-check": "tsc --noEmit --skipLibCheck",
+    "format": "biome format --write ./src ./test",
+    "prepublishOnly": "npm run clean && npm run lint && npm run build",
+    "version:dev": "npm version --no-git-tag-version prerelease --preid=dev",
+    "version:patch": "npm version --no-git-tag-version patch",
+    "version:minor": "npm version --no-git-tag-version minor",
+    "version:major": "npm version --no-git-tag-version major",
+    "publish:dev": "npm publish --registry=http://registry.dig.run/ --tag dev",
+    "publish:prod": "npm publish --registry=https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "filesystem",
+    "ai-safety",
+    "security",
+    "audit",
+    "path-protection",
+    "synet",
+    "unit-architecture",
+    "artificial-intelligence"
+  ],
+  "author": "SYNET Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@biomejs/biome": "^2.1.4",
+    "@synet/fs-memory": "^1.0.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synthetism/fs-ai.git",
+    "directory": "packages/fs-ai"
+  }
+}
