@@ -1,8 +1,8 @@
 {
   "name": "@synet/fs-ai",
-  "version": "0.0.1-dev.0",
+  "version": "0.0.1-dev.5",
   "description": "AI-safe filesystem with path protection, audit trails, and consciousness integration",
-  "type": "commonjs",
+  "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,6 +12,13 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -50,11 +57,11 @@
     "rimraf": "^6.0.1",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@types/node": "^24.2.1"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/synthetism/fs-ai.git",
-    "directory": "packages/fs-ai"
+    "url": "git+https://github.com/synthetism/fs-ai.git"
   }
 }

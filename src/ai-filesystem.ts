@@ -2,21 +2,24 @@
  * @synet/fs-ai - AI-Safe Filesystem Adapter
  *
  * Simple, stateless adapter that provides AI safety through:
+ * - Home path for simplified AI navigation
  * - Path allowlist/blocklist enforcement
  * - Operation restrictions
  * - Path traversal protection
  * - Read-only mode support
  */
 
-import type { IAsyncFileSystem } from "./async-filesystem.interface";
+import {  resolve, relative } from "node:path";
+import type { IAsyncFileSystem } from "./async-filesystem.interface.js";
 
 /**
  * AI Safety Configuration
  */
 export interface AISafetyConfig {
 	// Path Security
-	allowedPaths?: string[]; // Whitelist of allowed paths (if empty, all paths allowed except forbidden)
-	forbiddenPaths?: string[]; // Blacklist of forbidden paths
+	homePath?: string; // Base home directory for AI operations (default: current working directory)
+	allowedPaths?: string[]; // Whitelist of allowed paths relative to homePath (if empty, all paths allowed except forbidden)
+	forbiddenPaths?: string[]; // Blacklist of forbidden paths relative to homePath
 	maxDepth?: number; // Maximum directory depth (default: 10)
 
 	// Operation Restrictions
@@ -41,6 +44,7 @@ export type AIOperation =
  * Default AI safety configuration
  */
 const DEFAULT_AI_CONFIG: Required<AISafetyConfig> = {
+	homePath: process.cwd(), // Default to current working directory
 	allowedPaths: [], // Empty = allow all except forbidden
 	forbiddenPaths: [
 		"/etc/",
@@ -80,6 +84,7 @@ export class AIFileSystem implements IAsyncFileSystem {
 	) {
 		// Merge configuration with proper array handling
 		this.config = {
+			homePath: config.homePath || DEFAULT_AI_CONFIG.homePath,
 			allowedPaths: config.allowedPaths || DEFAULT_AI_CONFIG.allowedPaths,
 			forbiddenPaths: [
 				...DEFAULT_AI_CONFIG.forbiddenPaths,
@@ -97,69 +102,30 @@ export class AIFileSystem implements IAsyncFileSystem {
 	// ==========================================
 
 	/**
-	 * Normalize path to prevent traversal attacks
+	 * Resolve a path relative to the home directory
 	 */
-	private normalizePath(path: string): string {
-		// Split path into segments and resolve .. patterns
-		const segments = path
-			.split("/")
-			.filter((segment) => segment !== "" && segment !== ".");
-		const resolved: string[] = [];
-
-		for (const segment of segments) {
-			if (segment === "..") {
-				resolved.pop(); // Go up one level
-			} else {
-				resolved.push(segment);
-			}
+	private resolveFromHome(path: string): string {
+		// If path is absolute, use it as-is
+		if (path.startsWith("/")) {
+			return resolve(path);
 		}
-
-		// Join back and ensure consistent format
-		const result = resolved.join("/");
-		return path.startsWith("./") ? `./${result}` : result;
+		
+		// Otherwise, resolve relative to homePath
+		return resolve(this.config.homePath, path);
 	}
 
 	/**
 	 * Validate path is safe for AI access
 	 */
-	private validatePath(path: string): void {
-		const normalizedPath = this.normalizePath(path);
+	private validatePath(path: string): string {
+		// Resolve the full path from home directory
+		const resolvedPath = this.resolveFromHome(path);
+		const homePath = resolve(this.config.homePath);
 
-		// First, check for malicious path traversal that goes outside safe bounds
-		if (path.includes("../") || path.includes("..\\")) {
-			// If we have allowedPaths, check if the normalized result stays within bounds
-			if (this.config.allowedPaths.length > 0) {
-				const staysWithinAllowed = this.config.allowedPaths.some((allowed) => {
-					const normalizedAllowed = this.normalizePath(allowed);
-					const cleanPath = normalizedPath.replace(/^\.\//, "");
-					const cleanAllowed = normalizedAllowed.replace(/^\.\//, "");
-					return cleanPath.startsWith(cleanAllowed);
-				});
-
-				if (!staysWithinAllowed) {
-					throw new Error("Path not allowed");
-				}
-			} else {
-				// No allowedPaths means we only check forbidden paths
-				// But if the normalized path would escape the current directory context, block it
-				if (normalizedPath.startsWith("../") || normalizedPath === "..") {
-					throw new Error("Path not allowed");
-				}
-			}
-		}
-
-		// Check against forbidden paths (using both original and normalized)
+		// Check against forbidden paths first
 		for (const forbidden of this.config.forbiddenPaths) {
-			const cleanForbidden = forbidden.replace(/^\//, "");
-			const cleanNormalized = normalizedPath.replace(/^\.\//, "");
-			const cleanOriginal = path.replace(/^\.\//, "");
-
-			if (
-				cleanNormalized.startsWith(cleanForbidden) ||
-				cleanOriginal.startsWith(cleanForbidden) ||
-				normalizedPath.startsWith(forbidden) ||
-				path.startsWith(forbidden)
-			) {
+			const resolvedForbidden = this.resolveFromHome(forbidden);
+			if (resolvedPath.startsWith(resolvedForbidden)) {
 				throw new Error("Path not allowed");
 			}
 		}
@@ -167,39 +133,37 @@ export class AIFileSystem implements IAsyncFileSystem {
 		// Check against allowed paths (if specified)
 		if (this.config.allowedPaths.length > 0) {
 			const isAllowed = this.config.allowedPaths.some((allowed) => {
-				// Normalize the allowed path for comparison
-				const normalizedAllowed = this.normalizePath(allowed);
-
-				// Clean both paths for comparison (remove leading ./)
-				const cleanPath = normalizedPath.replace(/^\.\//, "");
-				const cleanAllowed = normalizedAllowed.replace(/^\.\//, "");
-
-				// Check various combinations to be thorough
-				return (
-					cleanPath.startsWith(cleanAllowed) ||
-					normalizedPath.startsWith(normalizedAllowed) ||
-					normalizedPath.startsWith(allowed) ||
-					path.startsWith(allowed)
-				);
+				const resolvedAllowed = this.resolveFromHome(allowed);
+				return resolvedPath.startsWith(resolvedAllowed);
 			});
 
 			if (!isAllowed) {
 				throw new Error("Path not allowed");
 			}
+		} else {
+			// If no allowedPaths are specified, only check that relative paths stay within home
+			// Absolute paths are allowed unless forbidden
+			if (!path.startsWith("/")) {
+				const relativePath = relative(homePath, resolvedPath);
+				if (relativePath.startsWith("..")) {
+					throw new Error("Path not allowed");
+				}
+			}
 		}
 
-		// Check directory depth (use normalized path for accurate count)
-		const cleanPath = normalizedPath.replace(/^\.\//, "");
-		const depth =
-			cleanPath === ""
-				? 0
-				: cleanPath.split("/").filter((segment) => segment.length > 0).length;
-		if (depth > this.config.maxDepth) {
-			throw new Error("Path exceeds maximum depth");
-		}
-	}
+		// Check directory depth from home (only for relative paths)
+		if (!path.startsWith("/")) {
+			const relativePath = relative(homePath, resolvedPath);
+			const depth = relativePath === "" ? 0 : relativePath.split("/").filter((segment: string) => segment.length > 0).length;
 
-	/**
+			if (depth > this.config.maxDepth) {
+				throw new Error("Path exceeds maximum depth");
+			}
+		}
+
+		// Return the resolved path for the base filesystem
+		return resolvedPath;
+	}	/**
 	 * Validate operation is allowed
 	 */
 	private validateOperation(operation: AIOperation): void {
@@ -223,56 +187,56 @@ export class AIFileSystem implements IAsyncFileSystem {
 
 	async readFile(path: string): Promise<string> {
 		this.validateOperation("readFile");
-		this.validatePath(path);
-		return this.baseFileSystem.readFile(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.readFile(resolvedPath);
 	}
 
 	async writeFile(path: string, content: string): Promise<void> {
 		this.validateOperation("writeFile");
-		this.validatePath(path);
-		return this.baseFileSystem.writeFile(path, content);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.writeFile(resolvedPath, content);
 	}
 
 	async exists(path: string): Promise<boolean> {
 		this.validateOperation("exists");
-		this.validatePath(path);
-		return this.baseFileSystem.exists(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.exists(resolvedPath);
 	}
 
 	async deleteFile(path: string): Promise<void> {
 		this.validateOperation("deleteFile");
-		this.validatePath(path);
-		return this.baseFileSystem.deleteFile(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.deleteFile(resolvedPath);
 	}
 
 	async createDir(path: string): Promise<void> {
 		this.validateOperation("ensureDir");
-		this.validatePath(path);
-		return this.baseFileSystem.ensureDir(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.ensureDir(resolvedPath);
 	}
 
 	async ensureDir(path: string): Promise<void> {
 		this.validateOperation("ensureDir");
-		this.validatePath(path);
-		return this.baseFileSystem.ensureDir(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.ensureDir(resolvedPath);
 	}
 
 	async deleteDir(path: string): Promise<void> {
 		this.validateOperation("deleteDir");
-		this.validatePath(path);
-		return this.baseFileSystem.deleteDir(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.deleteDir(resolvedPath);
 	}
 
 	async chmod(path: string, mode: number): Promise<void> {
 		this.validateOperation("chmod");
-		this.validatePath(path);
-		return this.baseFileSystem.chmod(path, mode);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.chmod(resolvedPath, mode);
 	}
 
 	async readDir(path: string): Promise<string[]> {
 		this.validateOperation("readDir");
-		this.validatePath(path);
-		return this.baseFileSystem.readDir(path);
+		const resolvedPath = this.validatePath(path);
+		return this.baseFileSystem.readDir(resolvedPath);
 	}
 
 	// ==========================================

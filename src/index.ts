@@ -3,4 +3,4 @@ export {
 	createAIFileSystem,
 	type AISafetyConfig,
 	type AIOperation,
-} from "./ai-filesystem";
+} from "./ai-filesystem.js";
