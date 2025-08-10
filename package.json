@@ -1,6 +1,6 @@
 {
   "name": "@synet/fs-ai",
-  "version": "1.0.0",
+  "version": "0.0.1-dev.0",
   "description": "AI-safe filesystem with path protection, audit trails, and consciousness integration",
   "type": "commonjs",
   "main": "./dist/index.js",

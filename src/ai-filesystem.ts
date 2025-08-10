@@ -78,7 +78,18 @@ export class AIFileSystem implements IAsyncFileSystem {
 		private readonly baseFileSystem: IAsyncFileSystem,
 		config: AISafetyConfig = {},
 	) {
-		this.config = { ...DEFAULT_AI_CONFIG, ...config };
+		// Merge configuration with proper array handling
+		this.config = {
+			allowedPaths: config.allowedPaths || DEFAULT_AI_CONFIG.allowedPaths,
+			forbiddenPaths: [
+				...DEFAULT_AI_CONFIG.forbiddenPaths,
+				...(config.forbiddenPaths || []),
+			],
+			maxDepth: config.maxDepth || DEFAULT_AI_CONFIG.maxDepth,
+			allowedOperations:
+				config.allowedOperations || DEFAULT_AI_CONFIG.allowedOperations,
+			readOnly: config.readOnly || DEFAULT_AI_CONFIG.readOnly,
+		};
 	}
 
 	// ==========================================
@@ -89,11 +100,23 @@ export class AIFileSystem implements IAsyncFileSystem {
 	 * Normalize path to prevent traversal attacks
 	 */
 	private normalizePath(path: string): string {
-		return path
-			.replace(/\.\./g, "") // Remove .. patterns
-			.replace(/\/+/g, "/") // Collapse multiple slashes
-			.replace(/^\//, "") // Remove leading slash for relative comparison
-			.replace(/\/$/, ""); // Remove trailing slash
+		// Split path into segments and resolve .. patterns
+		const segments = path
+			.split("/")
+			.filter((segment) => segment !== "" && segment !== ".");
+		const resolved: string[] = [];
+
+		for (const segment of segments) {
+			if (segment === "..") {
+				resolved.pop(); // Go up one level
+			} else {
+				resolved.push(segment);
+			}
+		}
+
+		// Join back and ensure consistent format
+		const result = resolved.join("/");
+		return path.startsWith("./") ? `./${result}` : result;
 	}
 
 	/**
@@ -102,46 +125,77 @@ export class AIFileSystem implements IAsyncFileSystem {
 	private validatePath(path: string): void {
 		const normalizedPath = this.normalizePath(path);
 
-		// Check for path traversal attempts in original path
+		// First, check for malicious path traversal that goes outside safe bounds
 		if (path.includes("../") || path.includes("..\\")) {
-			throw new Error(`[AI-SAFETY] Path traversal attempt blocked: '${path}'`);
+			// If we have allowedPaths, check if the normalized result stays within bounds
+			if (this.config.allowedPaths.length > 0) {
+				const staysWithinAllowed = this.config.allowedPaths.some((allowed) => {
+					const normalizedAllowed = this.normalizePath(allowed);
+					const cleanPath = normalizedPath.replace(/^\.\//, "");
+					const cleanAllowed = normalizedAllowed.replace(/^\.\//, "");
+					return cleanPath.startsWith(cleanAllowed);
+				});
+
+				if (!staysWithinAllowed) {
+					throw new Error("Path not allowed");
+				}
+			} else {
+				// No allowedPaths means we only check forbidden paths
+				// But if the normalized path would escape the current directory context, block it
+				if (normalizedPath.startsWith("../") || normalizedPath === "..") {
+					throw new Error("Path not allowed");
+				}
+			}
 		}
 
-		// Check against forbidden paths
+		// Check against forbidden paths (using both original and normalized)
 		for (const forbidden of this.config.forbiddenPaths) {
+			const cleanForbidden = forbidden.replace(/^\//, "");
+			const cleanNormalized = normalizedPath.replace(/^\.\//, "");
+			const cleanOriginal = path.replace(/^\.\//, "");
+
 			if (
-				normalizedPath.startsWith(forbidden.replace(/^\//, "")) ||
+				cleanNormalized.startsWith(cleanForbidden) ||
+				cleanOriginal.startsWith(cleanForbidden) ||
+				normalizedPath.startsWith(forbidden) ||
 				path.startsWith(forbidden)
 			) {
-				throw new Error(
-					`[AI-SAFETY] Forbidden path access blocked: '${path}' (matches: ${forbidden})`,
-				);
+				throw new Error("Path not allowed");
 			}
 		}
 
 		// Check against allowed paths (if specified)
 		if (this.config.allowedPaths.length > 0) {
-			const isAllowed = this.config.allowedPaths.some(
-				(allowed) =>
-					normalizedPath.startsWith(allowed.replace(/^\//, "")) ||
-					path.startsWith(allowed),
-			);
+			const isAllowed = this.config.allowedPaths.some((allowed) => {
+				// Normalize the allowed path for comparison
+				const normalizedAllowed = this.normalizePath(allowed);
+
+				// Clean both paths for comparison (remove leading ./)
+				const cleanPath = normalizedPath.replace(/^\.\//, "");
+				const cleanAllowed = normalizedAllowed.replace(/^\.\//, "");
+
+				// Check various combinations to be thorough
+				return (
+					cleanPath.startsWith(cleanAllowed) ||
+					normalizedPath.startsWith(normalizedAllowed) ||
+					normalizedPath.startsWith(allowed) ||
+					path.startsWith(allowed)
+				);
+			});
 
 			if (!isAllowed) {
-				throw new Error(
-					`[AI-SAFETY] Path not in allowlist: '${path}'. Allowed: ${this.config.allowedPaths.join(", ")}`,
-				);
+				throw new Error("Path not allowed");
 			}
 		}
 
-		// Check directory depth
-		const depth = normalizedPath
-			.split("/")
-			.filter((segment) => segment.length > 0).length;
+		// Check directory depth (use normalized path for accurate count)
+		const cleanPath = normalizedPath.replace(/^\.\//, "");
+		const depth =
+			cleanPath === ""
+				? 0
+				: cleanPath.split("/").filter((segment) => segment.length > 0).length;
 		if (depth > this.config.maxDepth) {
-			throw new Error(
-				`[AI-SAFETY] Path depth ${depth} exceeds maximum ${this.config.maxDepth}: '${path}'`,
-			);
+			throw new Error("Path exceeds maximum depth");
 		}
 	}
 
@@ -154,16 +208,12 @@ export class AIFileSystem implements IAsyncFileSystem {
 			this.config.readOnly &&
 			!["readFile", "exists", "readDir"].includes(operation)
 		) {
-			throw new Error(
-				`[AI-SAFETY] Write operation '${operation}' blocked - filesystem is in read-only mode`,
-			);
+			throw new Error("Operation not allowed");
 		}
 
 		// Check allowed operations
 		if (!this.config.allowedOperations.includes(operation)) {
-			throw new Error(
-				`[AI-SAFETY] Operation '${operation}' not allowed. Permitted: ${this.config.allowedOperations.join(", ")}`,
-			);
+			throw new Error(`Operation not allowed: ${operation}`);
 		}
 	}
 
